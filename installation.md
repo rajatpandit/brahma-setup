@@ -243,6 +243,61 @@ sudo systemctl disable --now hermes-gateway.service   # already done
 ~/.hermes/manage-sandbox.sh reseed    # Re-seed config
 ```
 
+#### Sandbox Environment
+
+All persistent data lives in the `hermes-data` Docker volume, mounted at `/opt/data`. The container is recreated on every `start` — only the volume survives.
+
+| Item | Location | Persists? |
+|------|----------|-----------|
+| Config | `/opt/data/config.yaml` | ✅ Volume |
+| Secrets | `/opt/data/.env` | ✅ Volume |
+| Sessions/DB | `/opt/data/state.db` | ✅ Volume |
+| Skills | `/opt/data/skills/` | ✅ Volume |
+| Logs | `/opt/data/logs/` | ✅ Volume |
+| Chromium | `/opt/data/chromium/` | ✅ Volume (installed once) |
+| Browser wrapper | `/opt/data/chromium-wrapper.sh` | ✅ Volume |
+| CA bundle | `/opt/data/combined-ca.pem` | ✅ Volume (rebuilt per start) |
+| Python venv (user) | `/opt/data/.venv/` | ✅ Volume |
+| Workspace | `/opt/data/workspace/` | ✅ Volume |
+| Hermes software | `/opt/hermes/` | ❌ Image (rebuilt on `rebuild`) |
+| Playwright Chromium | `/opt/hermes/.playwright/` | ❌ Image |
+| Python venv (system) | `/opt/hermes/.venv/` | ❌ Image |
+
+**Available runtimes and tools (inside container):**
+
+| Tool | Path | Version |
+|------|------|---------|
+| Python 3 | `/usr/bin/python3` | 3.13.5 |
+| Node.js | `/usr/bin/node` | v20.19.2 |
+| npm | `/usr/bin/npm` | 9.2.0 |
+| git | `/usr/bin/git` | — |
+| curl | `/usr/bin/curl` | — |
+| ripgrep | `/usr/bin/rg` | — |
+| ffmpeg | `/usr/bin/ffmpeg` | — |
+| openssl | `/usr/bin/openssl` | — |
+| gcc | `/usr/bin/gcc` | — |
+| make | `/usr/bin/make` | — |
+| uv (package mgr) | `/usr/local/bin/uv` | — |
+| tini | `/usr/bin/tini` | — |
+| Docker (DinD) | `/usr/bin/docker` | — |
+| Chromium (headless) | `/opt/data/chromium-wrapper.sh` | 148.0.7778.178 |
+| Chromium (headless shell) | `/opt/hermes/.playwright/chromium_headless_shell-1223/chrome-linux/headless_shell` | 1223 |
+
+**Environment variables:**
+
+| Variable | Value |
+|----------|-------|
+| `HERMES_HOME` | `/opt/data` |
+| `SSL_CERT_FILE` | `/opt/data/combined-ca.pem` |
+| `CHROME_PATH` | `/opt/data/chromium-wrapper.sh` |
+| `CHROME_BIN` | `/opt/data/chromium-wrapper.sh` |
+| `PLAYWRIGHT_CHROMIUM_PATH` | `/opt/data/chromium-wrapper.sh` |
+| `PATH` | `/opt/data/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin` |
+
+**Network:** `hermes-net` bridge — can reach `vllm-llm:8000`, `open-webui:8080`, `open-terminal:8000` by hostname. No host port exposure by default (dashboard UI on `127.0.0.1:9119`).
+
+**Browser resolution:** The Debian `chromium` package (ARM64-native) is installed into the data volume to work around `agent-browser`/`browser-use` failing to download `chromium-for-testing` (no ARM64 builds). The wrapper sets `LD_LIBRARY_PATH` for the non-standard install path. Installed once; detected and skipped on subsequent container starts.
+
 ---
 
 ### 5. SparkyUI / ComfyUI — Image Generation (Optional)
