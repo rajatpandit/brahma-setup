@@ -18,14 +18,14 @@ Host (brahma)
  │  │ Model: Qwen3.6-35B-A3B   │  │                              │  │
  │  └──────────┬──────────────┘  └──────────────────────────────┘  │
  │             │                                                    │
- │             │ http://vllm-llm:8000/v1                             │
+ │             │ https://vllm-llm:8000/v1 (CA signed, hermes-net)   │
  │             │                                                    │
  │  ┌──────────┴──────────────┐                                     │
  │  │ OpenWebUI (open-webui)   │                                     │
- │  │ Port: 12000→8080        │                                     │
- │  │ API: host.docker:11002  │                                     │
+ │  │ Network: hermes-net      │                                     │
+ │  │ Port: 12000→8080         │                                     │
+ │  │ SSL_CERT_FILE: /certs/   │                                     │
  │  │ No GPU                  │                                     │
- │  │ DB: open-webui_default  │                                     │
  │  └─────────────────────────┘                                     │
  │                                                                  │
  │  SparkyUI / ComfyUI (optional, currently off)                    │
@@ -87,34 +87,47 @@ curl http://vllm-llm:8000/v1/models    # from hermes-net
 
 ### 2. OpenWebUI — Chat Interface
 
-Web UI for interacting with LLMs. Connects to vLLM via API.
+Web UI for interacting with LLMs. Connects to vLLM via HTTPS on `hermes-net`.
 
 **Container:** `open-webui`
 **Image:** `ghcr.io/open-webui/open-webui:main`
-**Network:** `open-webui_default` (bridge)
+**Network:** `hermes-net` (not bridge — avoids hairpin NAT issues with host-published ports)
 **Port:** `12000:8080`
-**API Base:** `http://host.docker.internal:11002/v1`
+**API Base:** `https://vllm-llm:8000/v1`
+**SSL:** CA cert mounted at `/certs/ca.pem`, trusted via `SSL_CERT_FILE`
 
-Run via docker-compose (`~/sparkyui/docker-compose.yml` or standalone):
+Run command:
 ```bash
 docker run -d \
   --name open-webui \
   -p 12000:8080 \
-  -e OPENAI_API_BASE_URLS=http://host.docker.internal:11002/v1 \
+  --network hermes-net \
+  --restart unless-stopped \
+  -e OPENAI_API_BASE_URLS="https://vllm-llm:8000/v1" \
   -e USE_CUDA_DOCKER=false \
   -e DO_NOT_TRACK=true \
+  -e RAG_EMBEDDING_MODEL="sentence-transformers/all-MiniLM-L6-v2" \
+  -e AUXILIARY_EMBEDDING_MODEL="TaylorAI/bge-micro-v2" \
+  -e WHISPER_MODEL="base" \
+  -e ANONYMIZED_TELEMETRY=false \
+  -e SCARF_NO_ANALYTICS=true \
+  -e SSL_CERT_FILE="/certs/ca.pem" \
+  -v /home/rajatpandit/.hermes/certs/ca.pem:/certs/ca.pem:ro \
   ghcr.io/open-webui/open-webui:main
 ```
 
 **Environment:**
 | Variable | Value |
 |----------|-------|
-| `OPENAI_API_BASE_URLS` | `http://host.docker.internal:11002/v1` |
+| `OPENAI_API_BASE_URLS` | `https://vllm-llm:8000/v1` |
 | `RAG_EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` |
 | `AUXILIARY_EMBEDDING_MODEL` | `TaylorAI/bge-micro-v2` |
 | `WHISPER_MODEL` | `base` |
+| `SSL_CERT_FILE` | `/certs/ca.pem` |
 
 **Access:** http://brahma:12000
+
+**Note:** Must be on `hermes-net` to resolve `vllm-llm` hostname. The CA cert from `~/.hermes/certs/ca.pem` is mounted into the container so Python/requests can verify the self-signed vLLM certificate.
 
 ---
 
@@ -204,8 +217,8 @@ Access at http://brahma:8188.
 
 | Network | Driver | Subnet | Purpose |
 |---------|--------|--------|---------|
-| `hermes-net` | bridge | 172.19.0.0/16 | vLLM ↔ Hermes communication |
-| `open-webui_default` | bridge | — | OpenWebUI internal |
+| `hermes-net` | bridge | 172.19.0.0/16 | vLLM ↔ OpenWebUI ↔ Hermes communication |
+| `open-webui_default` | bridge | — | OpenWebUI internal (unused) |
 | `sparky_net` | bridge | — | ComfyUI internal |
 | `bridge` | bridge | 172.17.0.0/16 | Default Docker bridge |
 
@@ -215,7 +228,7 @@ Access at http://brahma:8188.
 |-----------|----------|-----|
 | `vllm-llm` | hermes-net, bridge | 172.19.0.3, 172.17.0.2 |
 | `hermes` | host | host IP (no container IP) |
-| `open-webui` | open-webui_default | — |
+| `open-webui` | hermes-net | — |
 | `comfyui` | sparky_net | — |
 
 ### iptables Hardening
