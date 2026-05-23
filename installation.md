@@ -9,14 +9,14 @@ Host (brahma)
  ┌─────────────────────────────────────────────────────────────────────────┐
  │  hermes-net (172.19.0.0/16, user-defined bridge)                        │
  │                                                                         │
- │  ┌─────────────────────────┐  ┌──────────────────────────────┐         │
- │  │ vLLM (vllm-llm)          │  │ Hermes (hermes)              │         │
- │  │ 172.19.0.3               │  │ network_mode: host           │         │
- │  │ GPU: yes                 │  │ GPU: no                      │         │
- │  │ Port: 11002→8000         │  │ Vol: hermes-data → /opt/data │         │
- │  │ SSL: /certs/*.pem        │  │ Gateway + Dashboard          │         │
- │  │ Model: Qwen3.6-35B-A3B   │  │                              │         │
- │  └──────────┬──────────────┘  └──────────────────────────────┘         │
+ │  ┌─────────────────────────┐  ┌──────────────────────────────────┐     │
+ │  │ vLLM (vllm-llm)          │  │ Hermes (hermes)                  │     │
+ │  │ 172.19.0.3               │  │ network_mode: host               │     │
+ │  │ GPU: yes                 │  │ GPU: no                          │     │
+ │  │ Port: 11002→8000         │  │ Vol: hermes-data → /opt/data  │     │
+ │  │ SSL: /certs/*.pem        │  │ Vol: hermes-venv → /.venv      │     │
+ │  │ Model: Qwen3.6-35B-A3B   │  │ Gateway + Dashboard              │     │
+ │  └──────────┬──────────────┘  └──────────────────────────────────┘     │
  │             │                                                           │
  │             │ https://vllm-llm:8000/v1 (CA signed, hermes-net)          │
  │             │                                                           │
@@ -188,7 +188,7 @@ Runs inside Docker with sandboxed access.
 **Container:** `hermes-sandbox`
 **Image:** `hermes-agent:latest` (built locally)
 **Network:** `hermes-net` (not host — connects to vLLM + OpenWebUI internally)
-**Volume:** `hermes-data` → `/opt/data` (config, sessions, logs, skills)
+**Volumes:** `hermes-data` → `/opt/data` (config, sessions, logs, skills); `hermes-venv` → `/opt/hermes/.venv` (persistent Python venv)
 **Browser:** Debian Chromium (ARM64) installed in volume, uses `chromium-wrapper.sh` for library path
 
 #### Build
@@ -197,23 +197,22 @@ cd ~/.hermes/hermes-agent
 docker build -t hermes-agent:latest .
 ```
 
-#### Data Volume
+#### Data Volumes
 ```bash
-docker volume create hermes-data
+docker volume create hermes-data      # config, sessions, logs, skills, Chromium
+docker volume create hermes-venv      # persistent Python venv (survives container recreate)
 ```
 
-Seeded via `~/.hermes/seed-sandbox.sh` with `config.yaml` and `.env`.
+- `hermes-data` is seeded via `~/.hermes/seed-sandbox.sh` with `config.yaml` and `.env`.
+- `hermes-venv` is seeded automatically by `manage-sandbox.sh` on first start — copies the image's `/opt/hermes/.venv/` into the volume so packages installed by Hermes (`uv pip install`, `lazy_deps.py`) survive container recreation.
+- On rebuild, re-seed `hermes-venv` to pick up new base dependencies: `docker volume rm hermes-venv && ~/.hermes/manage-sandbox.sh start`.
 
 #### Run
 ```bash
-cd ~/.hermes/hermes-agent
-HERMES_UID=$(id -u) HERMES_GID=$(id -g) docker compose up -d gateway
-```
-
-Or using the management script:
-```bash
 ~/.hermes/manage-sandbox.sh start
 ```
+
+The management script runs `docker rm` + `docker run` every time, so only volume data survives. The `hermes-venv` volume (mounted at `/opt/hermes/.venv/`) ensures Python packages installed by Hermes persist across restarts.
 
 #### Config (`config.yaml` — inside volume)
 | Key | Value |
@@ -245,7 +244,7 @@ sudo systemctl disable --now hermes-gateway.service   # already done
 
 #### Sandbox Environment
 
-All persistent data lives in the `hermes-data` Docker volume, mounted at `/opt/data`. The container is recreated on every `start` — only the volume survives.
+All persistent data lives in two Docker volumes: `hermes-data` (mounted at `/opt/data`) and `hermes-venv` (mounted at `/opt/hermes/.venv`). The container is recreated on every `start` — only the volumes survive.
 
 | Item | Location | Persists? |
 |------|----------|-----------|
@@ -261,7 +260,7 @@ All persistent data lives in the `hermes-data` Docker volume, mounted at `/opt/d
 | Workspace | `/opt/data/workspace/` | ✅ Volume |
 | Hermes software | `/opt/hermes/` | ❌ Image (rebuilt on `rebuild`) |
 | Playwright Chromium | `/opt/hermes/.playwright/` | ❌ Image |
-| Python venv (system) | `/opt/hermes/.venv/` | ❌ Image |
+| Python venv (system) | `/opt/hermes/.venv/` | ✅ Volume (`hermes-venv`) |
 
 **Available runtimes and tools (inside container):**
 
@@ -288,6 +287,7 @@ All persistent data lives in the `hermes-data` Docker volume, mounted at `/opt/d
 | Variable | Value |
 |----------|-------|
 | `HERMES_HOME` | `/opt/data` |
+| `HERMES_DASHBOARD` | `1` |
 | `SSL_CERT_FILE` | `/opt/data/combined-ca.pem` |
 | `CHROME_PATH` | `/opt/data/chromium-wrapper.sh` |
 | `CHROME_BIN` | `/opt/data/chromium-wrapper.sh` |
