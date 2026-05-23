@@ -112,6 +112,7 @@ docker run -d \
   -e ANONYMIZED_TELEMETRY=false \
   -e SCARF_NO_ANALYTICS=true \
   -e SSL_CERT_FILE="/certs/ca.pem" \
+  -v open-webui-data:/app/backend/data \
   -v /home/rajatpandit/.hermes/certs/ca.pem:/certs/ca.pem:ro \
   ghcr.io/open-webui/open-webui:main
 ```
