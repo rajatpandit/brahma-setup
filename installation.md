@@ -6,31 +6,32 @@
 
 ```
 Host (brahma)
- ┌──────────────────────────────────────────────────────────────────┐
- │  hermes-net (172.19.0.0/16, user-defined bridge)                 │
- │                                                                  │
- │  ┌─────────────────────────┐  ┌──────────────────────────────┐  │
- │  │ vLLM (vllm-llm)          │  │ Hermes (hermes)              │  │
- │  │ 172.19.0.3               │  │ network_mode: host           │  │
- │  │ GPU: yes                 │  │ GPU: no                      │  │
- │  │ Port: 11002→8000         │  │ Vol: hermes-data → /opt/data │  │
- │  │ SSL: /certs/*.pem        │  │ Gateway + Dashboard          │  │
- │  │ Model: Qwen3.6-35B-A3B   │  │                              │  │
- │  └──────────┬──────────────┘  └──────────────────────────────┘  │
- │             │                                                    │
- │             │ https://vllm-llm:8000/v1 (CA signed, hermes-net)   │
- │             │                                                    │
- │  ┌──────────┴──────────────┐                                     │
- │  │ OpenWebUI (open-webui)   │                                     │
- │  │ Network: hermes-net      │                                     │
- │  │ Port: 12000→8080         │                                     │
- │  │ SSL_CERT_FILE: /certs/   │                                     │
- │  │ No GPU                  │                                     │
- │  └─────────────────────────┘                                     │
- │                                                                  │
- │  SparkyUI / ComfyUI (optional, currently off)                    │
- │  sparky_net bridge, GPU: yes, Port: 8188                        │
- └──────────────────────────────────────────────────────────────────┘
+ ┌─────────────────────────────────────────────────────────────────────────┐
+ │  hermes-net (172.19.0.0/16, user-defined bridge)                        │
+ │                                                                         │
+ │  ┌─────────────────────────┐  ┌──────────────────────────────┐         │
+ │  │ vLLM (vllm-llm)          │  │ Hermes (hermes)              │         │
+ │  │ 172.19.0.3               │  │ network_mode: host           │         │
+ │  │ GPU: yes                 │  │ GPU: no                      │         │
+ │  │ Port: 11002→8000         │  │ Vol: hermes-data → /opt/data │         │
+ │  │ SSL: /certs/*.pem        │  │ Gateway + Dashboard          │         │
+ │  │ Model: Qwen3.6-35B-A3B   │  │                              │         │
+ │  └──────────┬──────────────┘  └──────────────────────────────┘         │
+ │             │                                                           │
+ │             │ https://vllm-llm:8000/v1 (CA signed, hermes-net)          │
+ │             │                                                           │
+ │  ┌──────────┴──────────────┐    ┌──────────────────────────┐           │
+ │  │ OpenWebUI (open-webui)   │    │ Open Terminal            │           │
+ │  │ Network: hermes-net      │◄──►│ (open-terminal)          │           │
+ │  │ Port: 12000→8080         │    │ RAM: 2g, CPU: 2          │           │
+ │  │ SSL_CERT_FILE: /certs/   │    │ Slim: 430MB              │           │
+ │  │ Terminal: auto-configured│    │ No GPU, no egress        │           │
+ │  │ No GPU                  │    │                          │           │
+ │  └─────────────────────────┘    └──────────────────────────┘           │
+ │                                                                         │
+ │  SparkyUI / ComfyUI (optional, currently off)                           │
+ │  sparky_net bridge, GPU: yes, Port: 8188                               │
+ └─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Services
@@ -98,6 +99,8 @@ Web UI for interacting with LLMs. Connects to vLLM via HTTPS on `hermes-net`.
 
 Run command:
 ```bash
+OPEN_TERMINAL_KEY=$(cut -d= -f2- < ~/.hermes/certs/open-terminal-key.env)
+
 docker run -d \
   --name open-webui \
   -p 12000:8080 \
@@ -112,6 +115,7 @@ docker run -d \
   -e ANONYMIZED_TELEMETRY=false \
   -e SCARF_NO_ANALYTICS=true \
   -e SSL_CERT_FILE="/certs/ca.pem" \
+  -e TERMINAL_SERVER_CONNECTIONS="[{\"id\":\"open-terminal\",\"url\":\"http://open-terminal:8000\",\"key\":\"${OPEN_TERMINAL_KEY}\",\"name\":\"Open Terminal\",\"auth_type\":\"bearer\"}]" \
   -v open-webui-data:/app/backend/data \
   -v /home/rajatpandit/.hermes/certs/ca.pem:/certs/ca.pem:ro \
   ghcr.io/open-webui/open-webui:main
@@ -125,6 +129,7 @@ docker run -d \
 | `AUXILIARY_EMBEDDING_MODEL` | `TaylorAI/bge-micro-v2` |
 | `WHISPER_MODEL` | `base` |
 | `SSL_CERT_FILE` | `/certs/ca.pem` |
+| `TERMINAL_SERVER_CONNECTIONS` | JSON array pre-configuring Open Terminal integration |
 
 **Access:** http://brahma:12000
 
@@ -132,7 +137,51 @@ docker run -d \
 
 ---
 
-### 3. Hermes — AI Agent (Messaging Gateway)
+### 3. Open Terminal — Remote Shell for AI Agents
+
+Lightweight remote shell server that OpenWebUI AI assistants can use to run commands, manage files, and install packages. Integrated via OpenWebUI's admin panel (pre-configured via `TERMINAL_SERVER_CONNECTIONS`).
+
+**Container:** `open-terminal`
+**Image:** `ghcr.io/open-webui/open-terminal:slim` (430MB, no sudo, git/curl/jq)
+**Network:** `hermes-net` (no host port exposed — internal only)
+**RAM/CPU:** `--memory 2g --cpus 2`
+**GPU:** none
+**Egress:** restricted to `pypi.org,github.com,files.pythonhosted.org` (pip install + git clone)
+
+Run command:
+```bash
+docker volume create open-terminal-data
+
+docker run -d \
+  --name open-terminal \
+  --network hermes-net \
+  --restart unless-stopped \
+  --memory 2g \
+  --cpus 2 \
+  -e OPEN_TERMINAL_API_KEY="$(openssl rand -hex 32)" \
+  -e OPEN_TERMINAL_ALLOWED_DOMAINS="pypi.org,github.com,files.pythonhosted.org" \
+  -v open-terminal-data:/home/user \
+  ghcr.io/open-webui/open-terminal:slim
+```
+
+**API Key:** stored at `~/.hermes/certs/open-terminal-key.env` (git-ignored, `chmod 600`). Also injected into OpenWebUI via `TERMINAL_SERVER_CONNECTIONS`.
+
+**Security notes:**
+- No host port exposure — reachable only from `hermes-net` containers
+- API key required (Bearer auth) — auto-generated at first run, rotate via `OPEN_TERMINAL_API_KEY`
+- Egress restricted to package repositories only
+- Memory/CPU capped via Docker flags
+- No Docker socket mount
+- No TLS needed — traffic stays on private Docker network
+
+**Verify:**
+```bash
+docker exec open-webui sh -c 'curl -s http://open-terminal:8000/health'
+```
+
+---
+
+### 4. Hermes — AI Agent (Messaging Gateway)
 
 Runs inside Docker with sandboxed access.
 
@@ -195,7 +244,7 @@ sudo systemctl disable --now hermes-gateway.service   # already done
 
 ---
 
-### 4. SparkyUI / ComfyUI — Image Generation (Optional)
+### 5. SparkyUI / ComfyUI — Image Generation (Optional)
 
 **Container:** `comfyui` (currently exited)
 **Image:** `sparkyui:cu130`
@@ -228,8 +277,9 @@ Access at http://brahma:8188.
 | Container | Networks | IPs |
 |-----------|----------|-----|
 | `vllm-llm` | hermes-net, bridge | 172.19.0.3, 172.17.0.2 |
-| `hermes` | host | host IP (no container IP) |
 | `open-webui` | hermes-net | — |
+| `open-terminal` | hermes-net | — |
+| `hermes-sandbox` | hermes-net | — |
 | `comfyui` | sparky_net | — |
 
 ### iptables Hardening
@@ -253,6 +303,7 @@ sudo systemctl enable --now hermes-iptables-restore.service
 |--------|---------|
 | `~/.hermes/manage-sandbox.sh` | Start/stop/status/logs/rebuild/reseed Hermes sandbox |
 | `~/.hermes/seed-sandbox.sh` | Populates `hermes-data` volume with config + secrets |
+| `scripts/snapshot.sh` | Dump live container configs for cross-referencing docs |
 
 ---
 
@@ -278,6 +329,15 @@ docker network connect hermes-net vllm-llm
 ### iptables rule blocking legitimate traffic
 ```bash
 sudo iptables -D DOCKER-USER -i br-6e123b98ba63 -d 172.17.0.0/16 -j DROP
+```
+
+### Open Terminal unreachable from OpenWebUI
+```bash
+docker exec open-webui sh -c 'curl -s http://open-terminal:8000/health'
+```
+If it fails, verify both are on `hermes-net`:
+```bash
+docker network inspect hermes-net --format '{{range .Containers}}{{.Name}} {{end}}'
 ```
 
 ### Docker daemon not starting
@@ -326,8 +386,9 @@ rm ~/.config/systemd/user/hermes-gateway.service
 | Service | Container | Status | Port |
 |---------|-----------|--------|------|
 | vLLM | `vllm-llm` | ✅ Running | 11002 |
-| Hermes | `hermes` | ✅ Running | gateway (internal) |
 | OpenWebUI | `open-webui` | ✅ Running | 12000 |
+| Open Terminal | `open-terminal` | ✅ Running | internal (hermes-net) |
+| Hermes | `hermes-sandbox` | ✅ Running | gateway (internal) |
 | ComfyUI | `comfyui` | ❌ Exited | 8188 |
 
 ### Common Commands
