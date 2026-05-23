@@ -185,10 +185,11 @@ docker exec open-webui sh -c 'curl -s http://open-terminal:8000/health'
 
 Runs inside Docker with sandboxed access.
 
-**Container:** `hermes`
+**Container:** `hermes-sandbox`
 **Image:** `hermes-agent:latest` (built locally)
-**Network:** `host` (uses host networking)
+**Network:** `hermes-net` (not host — connects to vLLM + OpenWebUI internally)
 **Volume:** `hermes-data` → `/opt/data` (config, sessions, logs, skills)
+**Browser:** Debian Chromium (ARM64) installed in volume, uses `chromium-wrapper.sh` for library path
 
 #### Build
 ```bash
