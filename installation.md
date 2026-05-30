@@ -6,32 +6,40 @@
 
 ```
 Host (brahma)
- ┌─────────────────────────────────────────────────────────────────────────┐
- │  hermes-net (172.19.0.0/16, user-defined bridge)                        │
- │                                                                         │
- │  ┌─────────────────────────┐  ┌──────────────────────────────────┐     │
- │  │ vLLM (vllm-llm)          │  │ Hermes (hermes)                  │     │
- │  │ 172.19.0.3               │  │ network_mode: host               │     │
- │  │ GPU: yes                 │  │ GPU: no                          │     │
- │  │ Port: 11002→8000         │  │ Vol: hermes-data → /opt/data  │     │
- │  │ SSL: /certs/*.pem        │  │ Vol: hermes-venv → /.venv      │     │
- │  │ Model: Qwen3.6-35B-A3B   │  │ Gateway + Dashboard              │     │
- │  └──────────┬──────────────┘  └──────────────────────────────────┘     │
- │             │                                                           │
- │             │ https://vllm-llm:8000/v1 (CA signed, hermes-net)          │
- │             │                                                           │
- │  ┌──────────┴──────────────┐    ┌──────────────────────────┐           │
- │  │ OpenWebUI (open-webui)   │    │ Open Terminal            │           │
- │  │ Network: hermes-net      │◄──►│ (open-terminal)          │           │
- │  │ Port: 12000→8080         │    │ RAM: 2g, CPU: 2          │           │
- │  │ SSL_CERT_FILE: /certs/   │    │ Slim: 430MB              │           │
- │  │ Terminal: auto-configured│    │ No GPU, no egress        │           │
- │  │ No GPU                  │    │                          │           │
- │  └─────────────────────────┘    └──────────────────────────┘           │
- │                                                                         │
- │  SparkyUI / ComfyUI (optional, currently off)                           │
- │  sparky_net bridge, GPU: yes, Port: 8188                               │
- └─────────────────────────────────────────────────────────────────────────┘
+ ┌─────────────────────────────────────────────────────────────────────────────────┐
+ │  hermes-net (172.19.0.0/16, user-defined bridge)                                │
+ │                                                                                 │
+ │  ┌─────────────────────────┐  ┌──────────────────────────────────┐             │
+ │  │ vLLM (vllm-llm)          │  │ Hermes (hermes)                  │             │
+ │  │ 172.19.0.3               │  │ GPU: no                          │             │
+ │  │ GPU: yes                 │  │ Vol: hermes-data → /opt/data     │             │
+ │  │ Port: 11002→8000         │  │ Vol: hermes-venv → /.venv        │             │
+ │  │ SSL: /certs/*.pem        │  │ Gateway + Dashboard              │             │
+ │  │ Model: Qwen3.6-35B-A3B   │  └──────────────────────────────────┘             │
+ │  └──────────┬──────────────┘                                                    │
+ │             │ https://vllm-llm:8000/v1 (CA signed, hermes-net)                   │
+ │             │                                                                   │
+ │  ┌──────────┴──────────────┐    ┌──────────────────────────┐                    │
+ │  │ OpenWebUI (open-webui)   │    │ Open Terminal            │                    │
+ │  │ Network: hermes-net      │◄──►│ (open-terminal)          │                    │
+ │  │ Port: 12000→8080         │    │ RAM: 2g, CPU: 2          │                    │
+ │  │ GPU: yes                 │    │ Slim: 430MB              │                    │
+ │  │ SSL_CERT_FILE: combined  │    │ No GPU, no egress        │                    │
+ │  │ Terminal: auto-configured│    └──────────────────────────┘                    │
+ │  │ STT: whisper-stt:9001    │                                                   │
+ │  │ TTS: kokoro-tts:8880     │                                                   │
+ │  └──────┬──────────┬───────┘                                                   │
+ │         │          │                                                            │
+ │  ┌──────┴────┐ ┌───┴───────┐    ┌──────────────────┐                            │
+ │  │whisper-stt│ │kokoro-tts │    │ Caddy (caddy)     │                            │
+ │  │ GPU: yes  │ │ GPU: yes  │    │ Port: 443 (HTTPS) │                            │
+ │  │ Port:9001 │ │ Port:8880 │    │ Proxy → webui:8080│                            │
+ │  │Whisper Lrg│ │Kokoro-82M │    │ Self-signed certs │                            │
+ │  └───────────┘ └───────────┘    └──────────────────┘                            │
+ │                                                                                 │
+ │  SparkyUI / ComfyUI (optional, currently off)                                   │
+ │  sparky_net bridge, GPU: yes, Port: 8188                                       │
+ └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Services
@@ -47,6 +55,7 @@ Runs `Qwen/Qwen3.6-35B-A3B-FP8` with GPU acceleration.
 **GPU:** all GPUs via `--gpus all`
 **SSL:** certs mounted from `~/.hermes/certs/`
 **Cache:** HF cache at `~/.cache/huggingface`
+**Auto-start:** `systemctl --user enable vllm-llm` (enabled, starts on boot via systemd user service)
 
 Run command:
 ```bash
@@ -88,52 +97,74 @@ curl http://vllm-llm:8000/v1/models    # from hermes-net
 
 ### 2. OpenWebUI — Chat Interface
 
-Web UI for interacting with LLMs. Connects to vLLM via HTTPS on `hermes-net`.
+Web UI for interacting with LLMs. Connects to vLLM via HTTPS on `hermes-net`. Uses GPU acceleration for local Whisper STT (`whisper-stt`) and Kokoro TTS (`kokoro-tts`) — all audio processing is fully local with no cloud dependency.
 
 **Container:** `open-webui`
-**Image:** `ghcr.io/open-webui/open-webui:main`
+**Image:** `ghcr.io/open-webui/open-webui:cuda`
 **Network:** `hermes-net` (not bridge — avoids hairpin NAT issues with host-published ports)
 **Port:** `12000:8080`
+**GPU:** yes (`--gpus all`)
 **API Base:** `https://vllm-llm:8000/v1`
-**SSL:** CA cert mounted at `/certs/ca.pem`, trusted via `SSL_CERT_FILE`
+**SSL:** Combined CA bundle at `/tmp/combined_ca_bundle.pem` (system CAs + local CA for vLLM), mounted at `/certs/combined-ca-bundle.pem`, trusted via `SSL_CERT_FILE`
+**STT:** External OpenAI-compatible Whisper server at `http://whisper-stt:9001/v1` (GPU)
+**TTS:** External OpenAI-compatible Kokoro server at `http://kokoro-tts:8880/v1` (GPU)
 
 Run command:
 ```bash
 OPEN_TERMINAL_KEY=$(cut -d= -f2- < ~/.hermes/certs/open-terminal-key.env)
+
+# Build combined CA bundle (system CAs + local CA)
+cat /etc/ssl/certs/ca-certificates.crt \
+  /home/rajatpandit/.hermes/certs/ca.pem \
+  > /tmp/combined_ca_bundle.pem
 
 docker run -d \
   --name open-webui \
   -p 12000:8080 \
   --network hermes-net \
   --restart unless-stopped \
+  --gpus all \
   -e OPENAI_API_BASE_URLS="https://vllm-llm:8000/v1" \
-  -e USE_CUDA_DOCKER=false \
+  -e USE_CUDA_DOCKER=true \
+  -e AUDIO_STT_ENGINE="openai" \
+  -e AUDIO_STT_OPENAI_API_BASE_URL="http://whisper-stt:9001/v1" \
+  -e AUDIO_STT_OPENAI_API_KEY="not-needed-but-required" \
+  -e AUDIO_STT_MODEL="whisper-1" \
+  -e AUDIO_TTS_ENGINE="openai" \
+  -e AUDIO_TTS_OPENAI_API_BASE_URL="http://kokoro-tts:8880/v1" \
+  -e AUDIO_TTS_OPENAI_API_KEY="not-needed-but-required" \
+  -e AUDIO_TTS_VOICE="alloy" \
   -e DO_NOT_TRACK=true \
   -e RAG_EMBEDDING_MODEL="sentence-transformers/all-MiniLM-L6-v2" \
   -e AUXILIARY_EMBEDDING_MODEL="TaylorAI/bge-micro-v2" \
-  -e WHISPER_MODEL="base" \
   -e ANONYMIZED_TELEMETRY=false \
   -e SCARF_NO_ANALYTICS=true \
-  -e SSL_CERT_FILE="/certs/ca.pem" \
+  -e SSL_CERT_FILE="/certs/combined-ca-bundle.pem" \
   -e TERMINAL_SERVER_CONNECTIONS="[{\"id\":\"open-terminal\",\"url\":\"http://open-terminal:8000\",\"key\":\"${OPEN_TERMINAL_KEY}\",\"name\":\"Open Terminal\",\"auth_type\":\"bearer\"}]" \
   -v open-webui-data:/app/backend/data \
-  -v /home/rajatpandit/.hermes/certs/ca.pem:/certs/ca.pem:ro \
-  ghcr.io/open-webui/open-webui:main
+  -v /tmp/combined_ca_bundle.pem:/certs/combined-ca-bundle.pem:ro \
+  ghcr.io/open-webui/open-webui:cuda
 ```
 
 **Environment:**
 | Variable | Value |
 |----------|-------|
 | `OPENAI_API_BASE_URLS` | `https://vllm-llm:8000/v1` |
+| `USE_CUDA_DOCKER` | `true` |
+| `AUDIO_STT_ENGINE` | `openai` |
+| `AUDIO_STT_OPENAI_API_BASE_URL` | `http://whisper-stt:9001/v1` |
+| `AUDIO_STT_MODEL` | `whisper-1` |
+| `AUDIO_TTS_ENGINE` | `openai` |
+| `AUDIO_TTS_OPENAI_API_BASE_URL` | `http://kokoro-tts:8880/v1` |
+| `AUDIO_TTS_VOICE` | `alloy` |
 | `RAG_EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` |
 | `AUXILIARY_EMBEDDING_MODEL` | `TaylorAI/bge-micro-v2` |
-| `WHISPER_MODEL` | `base` |
-| `SSL_CERT_FILE` | `/certs/ca.pem` |
+| `SSL_CERT_FILE` | `/certs/combined-ca-bundle.pem` |
 | `TERMINAL_SERVER_CONNECTIONS` | JSON array pre-configuring Open Terminal integration |
 
-**Access:** http://brahma:12000
+**Access:** http://brahma:12000 or https://brahma (via Caddy reverse proxy)
 
-**Note:** Must be on `hermes-net` to resolve `vllm-llm` hostname. The CA cert from `~/.hermes/certs/ca.pem` is mounted into the container so Python/requests can verify the self-signed vLLM certificate.
+**Note:** Must be on `hermes-net` to resolve `vllm-llm` hostname. The combined CA bundle merges system CA certificates (for HuggingFace, PyPI, etc.) with the local CA (for vLLM's self-signed cert).
 
 ---
 
@@ -181,7 +212,202 @@ docker exec open-webui sh -c 'curl -s http://open-terminal:8000/health'
 
 ---
 
-### 4. Hermes — AI Agent (Messaging Gateway)
+### 4. Whisper STT — GPU-Accelerated Speech-to-Text
+
+Local GPU-accelerated Whisper Large speech-to-text server. Exposes an OpenAI-compatible `/v1/audio/transcriptions` endpoint for OpenWebUI. Replaces the built-in CPU Whisper with full GPU acceleration on the DGX Spark.
+
+Uses `openai-whisper` (PyTorch-native) instead of `faster-whisper` (CTranslate2) because CTranslate2 does not ship CUDA wheels for `aarch64`.
+
+**Container:** `whisper-stt`
+**Image:** `whisper-stt` (custom, built locally)
+**Network:** `hermes-net`
+**Port:** `9001` (internal to hermes-net)
+**GPU:** yes (`--gpus all`)
+**Model:** Whisper `large` (~3 GB on GPU, ~4 GB transient during transcription)
+**Framework:** PyTorch 2.9.1+cu128, CUDA 12.8 (ARM64)
+
+#### Build
+
+```bash
+cd ~/whisper-stt
+docker build -t whisper-stt .
+```
+
+#### Run
+
+```bash
+docker run -d \
+  --name whisper-stt \
+  --network hermes-net \
+  --gpus all \
+  -p 9001:9001 \
+  --restart unless-stopped \
+  whisper-stt
+```
+
+#### Dockerfile
+
+`~/whisper-stt/Dockerfile`:
+```dockerfile
+FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
+
+RUN apt-get update && apt-get install -y python3 python3-pip ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN pip3 install torch==2.9.1+cu128 \
+    --index-url https://download.pytorch.org/whl/cu128
+
+RUN pip3 install openai-whisper fastapi uvicorn python-multipart
+
+COPY whisper_server.py .
+
+EXPOSE 9001
+CMD ["uvicorn", "whisper_server:app", "--host", "0.0.0.0", "--port", "9001"]
+```
+
+#### API
+
+- `POST /v1/audio/transcriptions` — accepts audio file upload, returns `{"text": "..."}`
+- `GET /health` — health check
+
+**Verify:**
+```bash
+curl -s http://whisper-stt:9001/health
+# {"status":"ok"}
+```
+
+---
+
+### 5. Kokoro TTS — GPU-Accelerated Text-to-Speech
+
+Local GPU-accelerated Kokoro-82M text-to-speech server. Exposes an OpenAI-compatible `/v1/audio/speech` endpoint. Features 54 voices, ~1 GB GPU footprint, fully local with no cloud dependency.
+
+**Container:** `kokoro-tts`
+**Image:** `kokoro-tts` (custom, built locally)
+**Network:** `hermes-net`
+**Port:** `8880` (internal to hermes-net)
+**GPU:** yes (`--gpus all`)
+**Model:** Kokoro-82M (~1 GB on GPU)
+**Framework:** PyTorch 2.9.1+cu128, CUDA 12.8 (ARM64)
+**Voices:** 54 (default `alloy` maps to `af_heart`; see `kokoro_server.py` for voice map)
+
+#### Build
+
+```bash
+cd ~/kokoro-tts
+docker build -t kokoro-tts .
+```
+
+#### Run
+
+```bash
+docker run -d \
+  --name kokoro-tts \
+  --network hermes-net \
+  --gpus all \
+  -p 8880:8880 \
+  --restart unless-stopped \
+  kokoro-tts
+```
+
+#### Dockerfile
+
+`~/kokoro-tts/Dockerfile`:
+```dockerfile
+FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
+
+RUN apt-get update && apt-get install -y python3 python3-pip ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN pip3 install torch==2.9.1+cu128 \
+    --index-url https://download.pytorch.org/whl/cu128
+
+RUN pip3 install kokoro soundfile fastapi uvicorn python-multipart
+
+COPY kokoro_server.py .
+
+EXPOSE 8880
+CMD ["uvicorn", "kokoro_server:app", "--host", "0.0.0.0", "--port", "8880"]
+```
+
+#### Voice Map
+
+| OpenAI Voice | Kokoro Voice |
+|-------------|--------------|
+| `alloy`     | `af_heart`   |
+| `echo`      | `am_mind`    |
+| `fable`     | `af_bella`   |
+| `nova`      | `am_adam`    |
+| `onyx`      | `am_michael` |
+| `shimmer`   | `af_nicole`  |
+
+#### API
+
+- `POST /v1/audio/speech` — accepts `{ model, input, voice, response_format, speed }`, returns WAV audio
+- `GET /health` — health check
+
+**Verify:**
+```bash
+curl -s http://kokoro-tts:8880/health
+# {"status":"ok"}
+```
+
+---
+
+### 6. Caddy — HTTPS Reverse Proxy
+
+Serves HTTPS on port 443 using self-signed certificates, proxying to OpenWebUI's HTTP port 8080. Required for microphone access in the browser (browsers block `getUserMedia` on non-HTTPS origins).
+
+**Container:** `caddy`
+**Image:** `caddy:latest`
+**Network:** `hermes-net`
+**Ports:** `80:80`, `443:443`
+**Certs:** from `~/.hermes/certs/` (mounted at `/certs`)
+
+#### Caddyfile
+
+`~/Caddyfile`:
+```
+brahma, brahma.local {
+    tls /certs/server.pem /certs/server-key.pem
+
+    reverse_proxy open-webui:8080
+}
+```
+
+#### Run
+
+```bash
+docker run -d \
+  --name caddy \
+  --network hermes-net \
+  -p 80:80 \
+  -p 443:443 \
+  --restart unless-stopped \
+  -v /home/rajatpandit/Caddyfile:/etc/caddy/Caddyfile:ro \
+  -v /home/rajatpandit/.hermes/certs:/certs:ro \
+  caddy:latest
+```
+
+#### Combined CA Bundle
+
+OpenWebUI needs to trust both system CA certificates (for HuggingFace, PyPI) and the local CA (for vLLM's self-signed cert). A combined bundle is created at `/tmp/combined_ca_bundle.pem`:
+
+```bash
+cat /etc/ssl/certs/ca-certificates.crt \
+  /home/rajatpandit/.hermes/certs/ca.pem \
+  > /tmp/combined_ca_bundle.pem
+```
+
+This is mounted into OpenWebUI at `/certs/combined-ca-bundle.pem` and referenced via `SSL_CERT_FILE`.
+
+---
+
+### 7. Hermes — AI Agent (Messaging Gateway)
 
 Runs inside Docker with sandboxed access.
 
@@ -300,7 +526,7 @@ All persistent data lives in two Docker volumes: `hermes-data` (mounted at `/opt
 
 ---
 
-### 5. SparkyUI / ComfyUI — Image Generation (Optional)
+### 8. SparkyUI / ComfyUI — Image Generation (Optional)
 
 **Container:** `comfyui` (currently exited)
 **Image:** `sparkyui:cu130`
@@ -323,7 +549,7 @@ Access at http://brahma:8188.
 
 | Network | Driver | Subnet | Purpose |
 |---------|--------|--------|---------|
-| `hermes-net` | bridge | 172.19.0.0/16 | vLLM ↔ OpenWebUI ↔ Hermes communication |
+| `hermes-net` | bridge | 172.19.0.0/16 | vLLM ↔ OpenWebUI ↔ Hermes ↔ STT/TTS |
 | `open-webui_default` | bridge | — | OpenWebUI internal (unused) |
 | `sparky_net` | bridge | — | ComfyUI internal |
 | `bridge` | bridge | 172.17.0.0/16 | Default Docker bridge |
@@ -335,6 +561,9 @@ Access at http://brahma:8188.
 | `vllm-llm` | hermes-net, bridge | 172.19.0.3, 172.17.0.2 |
 | `open-webui` | hermes-net | — |
 | `open-terminal` | hermes-net | — |
+| `whisper-stt` | hermes-net | — |
+| `kokoro-tts` | hermes-net | — |
+| `caddy` | hermes-net | — |
 | `hermes-sandbox` | hermes-net | — |
 | `comfyui` | sparky_net | — |
 
@@ -396,6 +625,35 @@ If it fails, verify both are on `hermes-net`:
 docker network inspect hermes-net --format '{{range .Containers}}{{.Name}} {{end}}'
 ```
 
+### Whisper STT not responding
+```bash
+curl -s http://whisper-stt:9001/health
+docker logs whisper-stt --tail 20
+```
+First load downloads the Whisper `large` model (~3 GB) — check logs for download progress.
+
+### Kokoro TTS not responding
+```bash
+curl -s http://kokoro-tts:8880/health
+docker logs kokoro-tts --tail 20
+```
+First load downloads the Kokoro model from HuggingFace.
+
+### Caddy not serving HTTPS
+```bash
+docker logs caddy
+```
+Ensure cert files exist at `~/.hermes/certs/{server.pem,server-key.pem,ca.pem}`. Caddy will fail if they're missing.
+
+### Combined CA bundle needs regeneration
+If vLLM or HuggingFace certs change, regenerate the bundle:
+```bash
+cat /etc/ssl/certs/ca-certificates.crt \
+  /home/rajatpandit/.hermes/certs/ca.pem \
+  > /tmp/combined_ca_bundle.pem
+docker restart open-webui
+```
+
 ### Docker daemon not starting
 ```bash
 sudo systemctl status docker
@@ -437,14 +695,17 @@ rm ~/.config/systemd/user/hermes-gateway.service
 
 ## Quick Reference
 
-### Current Status (as of 2026-05-23)
+### Current Status (as of 2026-05-30)
 
 | Service | Container | Status | Port |
 |---------|-----------|--------|------|
-| vLLM | `vllm-llm` | ✅ Running | 11002 |
-| OpenWebUI | `open-webui` | ✅ Running | 12000 |
+| vLLM | `vllm-llm` | ✅ Running (auto-start enabled) | 11002 |
+| OpenWebUI | `open-webui` | ✅ Running (GPU) | 12000 / 443 (Caddy) |
 | Open Terminal | `open-terminal` | ✅ Running | internal (hermes-net) |
-| Hermes | `hermes-sandbox` | ✅ Running | gateway (internal) |
+| Whisper STT | `whisper-stt` | ✅ Running (GPU) | 9001 |
+| Kokoro TTS | `kokoro-tts` | ✅ Running (GPU) | 8880 |
+| Caddy | `caddy` | ✅ Running (HTTPS) | 80, 443 |
+| Hermes | `hermes` | ✅ Running | gateway (internal) |
 | ComfyUI | `comfyui` | ❌ Exited | 8188 |
 
 ### Common Commands
@@ -461,6 +722,20 @@ docker ps
 
 # Verify vLLM API
 curl -k https://localhost:11002/v1/models
+
+# Verify Whisper STT
+curl -s http://whisper-stt:9001/health
+
+# Verify Kokoro TTS
+curl -s http://kokoro-tts:8880/health
+
+# Rebuild whisper-stt image (after code changes)
+cd ~/whisper-stt && docker build -t whisper-stt .
+docker rm -f whisper-stt && docker run -d --name whisper-stt --network hermes-net --gpus all -p 9001:9001 --restart unless-stopped whisper-stt
+
+# Rebuild kokoro-tts image (after code changes)
+cd ~/kokoro-tts && docker build -t kokoro-tts .
+docker rm -f kokoro-tts && docker run -d --name kokoro-tts --network hermes-net --gpus all -p 8880:8880 --restart unless-stopped kokoro-tts
 
 # SSH tunnel for dashboard (if needed)
 ssh -L 9119:localhost:9119 brahma
